@@ -1,0 +1,159 @@
+services:
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ivg}
+      POSTGRES_USER: ${POSTGRES_USER:-ivg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ivg}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ivg} -d ${POSTGRES_DB:-ivg}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+      CADDY_EMAIL: ${CADDY_EMAIL:-}
+      CADDY_MAX_BODY: ${CADDY_MAX_BODY:-10MB}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  web:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "5001:5001"
+    expose:
+      - "5001"
+    environment:
+      APP_ENV: production
+      APP_HOST: 0.0.0.0
+      APP_PORT: 5001
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://ivg:ivg@postgres:5432/ivg}
+      CELERY_BROKER_URL: ${DOCKER_CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${DOCKER_CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      CELERY_WORKER_POOL: ${CELERY_WORKER_POOL:-prefork}
+      CELERY_TASK_ALWAYS_EAGER: ${CELERY_TASK_ALWAYS_EAGER:-false}
+      ASYNC_TASKS_ENABLED: ${ASYNC_TASKS_ENABLED:-true}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-nano_banana}
+      FAST_MODE: ${FAST_MODE:-false}
+      NUMBA_CACHE_DIR: /tmp/numba_cache
+      NUMBA_DISABLE_JIT: ${NUMBA_DISABLE_JIT:-1}
+      U2NET_HOME: /app/runtime/u2net
+      BACKGROUND_REMOVAL_LAZY_INIT: "true"
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5001"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:5001/api/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  worker_generate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://ivg:ivg@postgres:5432/ivg}
+      CELERY_BROKER_URL: ${DOCKER_CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${DOCKER_CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      CELERY_WORKER_POOL: ${CELERY_WORKER_POOL:-prefork}
+      CELERY_TASK_ALWAYS_EAGER: ${CELERY_TASK_ALWAYS_EAGER:-false}
+      ASYNC_TASKS_ENABLED: ${ASYNC_TASKS_ENABLED:-true}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-nano_banana}
+      FAST_MODE: ${FAST_MODE:-false}
+      NUMBA_CACHE_DIR: /tmp/numba_cache
+      NUMBA_DISABLE_JIT: ${NUMBA_DISABLE_JIT:-1}
+      U2NET_HOME: /app/runtime/u2net
+    command:
+      [
+        "celery",
+        "-A",
+        "celery_app.celery_app",
+        "worker",
+        "-Q",
+        "ivg_generate",
+        "--loglevel=info",
+        "--concurrency=4"
+      ]
+    restart: unless-stopped
+
+  worker_bg:
+    build: .
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://ivg:ivg@postgres:5432/ivg}
+      CELERY_BROKER_URL: ${DOCKER_CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${DOCKER_CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      CELERY_WORKER_POOL: ${CELERY_WORKER_POOL:-prefork}
+      CELERY_TASK_ALWAYS_EAGER: ${CELERY_TASK_ALWAYS_EAGER:-false}
+      ASYNC_TASKS_ENABLED: ${ASYNC_TASKS_ENABLED:-true}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-nano_banana}
+      FAST_MODE: ${FAST_MODE:-false}
+      NUMBA_CACHE_DIR: /tmp/numba_cache
+      NUMBA_DISABLE_JIT: ${NUMBA_DISABLE_JIT:-1}
+      U2NET_HOME: /app/runtime/u2net
+    volumes:
+      - u2net_cache:/app/runtime/u2net
+    command:
+      [
+        "celery",
+        "-A",
+        "celery_app.celery_app",
+        "worker",
+        "-Q",
+        "ivg_bg",
+        "--loglevel=info",
+        "--concurrency=1"
+      ]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  u2net_cache:
+  caddy_data:
+  caddy_config:

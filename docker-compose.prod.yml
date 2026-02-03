@@ -1,0 +1,27 @@
+services:
+  web:
+    env_file:
+      - .env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker_generate:
+    env_file:
+      - .env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker_bg:
+    env_file:
+      - .env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy

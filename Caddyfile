@@ -1,0 +1,11 @@
+{
+  email {$CADDY_EMAIL}
+}
+
+{$CADDY_DOMAIN} {
+  encode zstd gzip
+  request_body {
+    max_size {$CADDY_MAX_BODY}
+  }
+  reverse_proxy web:5001
+}

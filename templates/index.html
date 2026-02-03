@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Illustration Variant Generator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Manrope:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__content">
+        <h1>Illustration Variant Generator</h1>
+        <p>Upload, edit, or describe. Uses {{ ai_label }} when available.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      {% if messages %}
+        <ul class="alert">
+          {% for msg in messages %}
+            <li>{{ msg }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <div class="split">
+        <section class="card card--form">
+          <form method="post" enctype="multipart/form-data" class="form"
+            data-jobs-enabled="{{ 'true' if jobs_enabled else 'false' }}">
+            <div class="form__field">
+              <label for="image">Upload image</label>
+              <input id="image" name="image" type="file" accept="image/*" />
+              <p class="helper-text">Optional if you select a style or use forward generation.</p>
+            </div>
+
+            <div class="form__field">
+              <label for="style_id">Style</label>
+              <select id="style_id" name="style_id" data-selected="{{ selected_style_id }}">
+                <option value="">No style</option>
+              </select>
+              <p class="helper-text">
+                Pick the style that matches your source image. The selected style will restyle the
+                upload to that look.
+              </p>
+            </div>
+
+            <div class="form__field">
+              <label for="prompt">Natural language prompt</label>
+              <textarea id="prompt" name="prompt" rows="3"
+                placeholder="e.g. Make the sky sunset orange, keep subject intact">{{ prompt_value or '' }}</textarea>
+              {% if not nano_available %}
+                <p class="helper-text">{{ ai_label }} not available. Prompt will be ignored.</p>
+              {% endif %}
+            </div>
+
+            <div class="form__field form__toggle">
+              <input type="hidden" name="fast_mode" value="0" />
+              <label class="toggle">
+                <input
+                  id="fast_mode"
+                  name="fast_mode"
+                  type="checkbox"
+                  {% if fast_mode_checked %}checked{% endif %}
+                />
+                <span>Fast mode (faster, lower fidelity)</span>
+              </label>
+              <p class="helper-text">
+                Uses a faster model and lighter style reference processing.
+              </p>
+            </div>
+
+            <div class="form__field form__toggle">
+              <label class="toggle">
+                <input
+                  id="use_previous"
+                  name="use_previous"
+                  type="checkbox"
+                  {% if use_previous_checked %}checked{% endif %}
+                  {% if not result_url %}disabled{% endif %}
+                />
+                <span>Use generated image as next input</span>
+              </label>
+              <input
+                id="previous_result"
+                name="previous_result"
+                type="hidden"
+                value="{{ result_id or '' }}"
+              />
+              <input
+                id="source_image_id"
+                name="source_image_id"
+                type="hidden"
+                value="{{ source_image_id or '' }}"
+              />
+              <p
+                class="helper-text"
+                id="use-previous-helper"
+                {% if result_url %}hidden{% endif %}
+              >
+                Generate an image first to enable forward generation.
+              </p>
+            </div>
+
+            <button type="submit" class="button">Generate</button>
+            <button
+              type="submit"
+              class="button button--secondary"
+              name="regenerate"
+              value="1"
+              {% if not result_url %}disabled{% endif %}
+            >
+              Regenerate
+            </button>
+          </form>
+        </section>
+
+        <section
+          class="card card--result"
+          data-result-url="{{ result_url or '' }}"
+          data-result-id="{{ result_id or '' }}"
+          data-original-url="{{ original_url or '' }}"
+        >
+          <h2>Result</h2>
+
+          <div class="progress-panel" id="generation-progress" hidden>
+            <p class="progress-title">Generating variation...</p>
+            <div class="progress-bar" role="presentation"></div>
+            <p class="helper-text">This can take up to a minute.</p>
+          </div>
+
+          <div class="progress-panel" id="bg-progress" hidden>
+            <p class="progress-title">Removing background...</p>
+            <div class="progress-bar" role="presentation"></div>
+          </div>
+
+          <div id="result-content" {% if not result_url %}hidden{% endif %}>
+            <p
+              class="status-message"
+              id="status-message"
+              {% if not status_message %}hidden{% endif %}
+            >
+              {{ status_message or '' }}
+            </p>
+            <p class="helper-text" id="warning-message" hidden></p>
+
+            <dl class="result-meta">
+              <div>
+                <dt>AI Prompt</dt>
+                <dd id="prompt-used">
+                  {% if prompt_used %}
+                    <code>{{ prompt_used }}</code>
+                  {% else %}
+                    <em>None</em>
+                  {% endif %}
+                </dd>
+              </div>
+            </dl>
+
+            <div class="result-grid">
+              <div class="result-image">
+                <h3 class="result-title">Source</h3>
+                <img id="source-image" src="{{ original_url or '' }}" alt="Source" />
+              </div>
+              <div class="result-image">
+                <h3 class="result-title">Result</h3>
+                <img id="result-image" src="{{ result_url or '' }}" alt="Result" />
+              </div>
+            </div>
+
+            <div class="actions">
+              <a class="button button--secondary" href="{{ result_url or '' }}" download>
+                Download
+              </a>
+              <button class="button button--secondary" type="button" id="history-prev" disabled>
+                Revert
+              </button>
+              <button class="button button--secondary" type="button" id="history-next" disabled>
+                Forward
+              </button>
+              <button
+                class="button"
+                type="button"
+                id="remove-bg"
+                data-image-id="{{ result_id or '' }}"
+                data-original-id="{{ result_id or '' }}"
+                data-original-url="{{ result_url or '' }}"
+                {% if not result_id %}disabled{% endif %}
+              >
+                Remove Background
+              </button>
+              <button class="button button--secondary" type="button" id="undo-bg" disabled>
+                Undo Background Removal
+              </button>
+              <p class="helper-text action-status" id="bg-status" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="empty-state" id="empty-state" {% if result_url %}hidden{% endif %}>
+            <p class="empty-title">No result yet</p>
+            <p class="helper-text">Generate an image to see comparisons and downloads here.</p>
+            <p class="helper-text" id="generation-error" hidden></p>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p>a twinkl tool</p>
+    </footer>
+
+    <script>
+      (() => {
+        const styleSelect = document.getElementById("style_id");
+        const formEl = document.querySelector(".form");
+        const generationProgress = document.getElementById("generation-progress");
+        const bgProgress = document.getElementById("bg-progress");
+        const resultContent = document.getElementById("result-content");
+        const emptyState = document.getElementById("empty-state");
+        const generationError = document.getElementById("generation-error");
+        const statusMessage = document.getElementById("status-message");
+        const warningMessage = document.getElementById("warning-message");
+        const promptUsed = document.getElementById("prompt-used");
+        const resultImage = document.getElementById("result-image");
+        const sourceImage = document.getElementById("source-image");
+        const downloadLink = document.querySelector(".actions a[download]");
+        const previousResult = document.getElementById("previous_result");
+        const sourceImageId = document.getElementById("source_image_id");
+        const removeButton = document.getElementById("remove-bg");
+        const undoButton = document.getElementById("undo-bg");
+        const statusEl = document.getElementById("bg-status");
+        const resultCard = document.querySelector(".card--result");
+        const usePrevious = document.getElementById("use_previous");
+        const usePreviousHelper = document.getElementById("use-previous-helper");
+        const regenerateButton = formEl
+          ? formEl.querySelector("button[name='regenerate']")
+          : null;
+        const historyPrev = document.getElementById("history-prev");
+        const historyNext = document.getElementById("history-next");
+        const jobsEnabled = formEl?.dataset.jobsEnabled === "true";
+
+        const toggleProgress = (element, show) => {
+          if (!element) {
+            return;
+          }
+          element.hidden = !show;
+        };
+
+        const showGenerationProgress = () => {
+          toggleProgress(generationProgress, true);
+          toggleProgress(bgProgress, false);
+          if (resultContent) {
+            resultContent.hidden = true;
+          }
+          if (emptyState) {
+            emptyState.hidden = true;
+          }
+        };
+
+        const setStatusMessage = (message) => {
+          if (!statusMessage) {
+            return;
+          }
+          if (message) {
+            statusMessage.textContent = message;
+            statusMessage.hidden = false;
+          } else {
+            statusMessage.textContent = "";
+            statusMessage.hidden = true;
+          }
+        };
+
+        const setWarningMessage = (message) => {
+          if (!warningMessage) {
+            return;
+          }
+          if (message) {
+            warningMessage.textContent = message;
+            warningMessage.hidden = false;
+          } else {
+            warningMessage.textContent = "";
+            warningMessage.hidden = true;
+          }
+        };
+
+        const setGenerationError = (message) => {
+          if (!generationError) {
+            return;
+          }
+          if (message) {
+            generationError.textContent = message;
+            generationError.hidden = false;
+          } else {
+            generationError.textContent = "";
+            generationError.hidden = true;
+          }
+        };
+
+        const setPromptUsed = (prompt) => {
+          if (!promptUsed) {
+            return;
+          }
+          promptUsed.textContent = "";
+          if (prompt) {
+            const codeEl = document.createElement("code");
+            codeEl.textContent = prompt;
+            promptUsed.appendChild(codeEl);
+          } else {
+            const emEl = document.createElement("em");
+            emEl.textContent = "None";
+            promptUsed.appendChild(emEl);
+          }
+        };
+
+        const extractImageId = (url) => {
+          if (!url) {
+            return "";
+          }
+          const match = url.match(/\/api\/images\/([0-9a-f-]+)/i);
+          return match ? match[1] : "";
+        };
+
+        const applyEntry = (entry) => {
+          if (!entry) {
+            return;
+          }
+          if (resultImage && entry.result_url) {
+            resultImage.src = entry.result_url;
+          }
+          if (sourceImage) {
+            sourceImage.src = entry.original_url || entry.result_url || sourceImage.src;
+          }
+          if (downloadLink && entry.result_url) {
+            downloadLink.href = entry.result_url;
+          }
+          if (removeButton && entry.result_id && entry.result_url) {
+            removeButton.dataset.imageId = entry.result_id;
+            removeButton.dataset.originalId = entry.result_id;
+            removeButton.dataset.originalUrl = entry.result_url;
+            removeButton.disabled = false;
+          }
+          if (previousResult && entry.result_id) {
+            previousResult.value = entry.result_id;
+          }
+          if (sourceImageId) {
+            sourceImageId.value = extractImageId(entry.original_url);
+          }
+          if (resultCard && entry.result_id) {
+            resultCard.dataset.resultId = entry.result_id;
+            resultCard.dataset.resultUrl = entry.result_url || "";
+            resultCard.dataset.originalUrl = entry.original_url || "";
+          }
+          if (undoButton) {
+            undoButton.disabled = true;
+          }
+          if (statusEl) {
+            statusEl.textContent = "";
+          }
+          if (usePrevious) {
+            usePrevious.disabled = !entry.result_id;
+          }
+          if (usePreviousHelper) {
+            usePreviousHelper.hidden = !!entry.result_id;
+          }
+          if (regenerateButton) {
+            regenerateButton.disabled = !entry.result_id;
+          }
+          if (resultContent) {
+            resultContent.hidden = !entry.result_url;
+          }
+          if (emptyState) {
+            emptyState.hidden = !!entry.result_url;
+          }
+        };
+
+        let history = [];
+        let currentIndex = -1;
+
+        const updateHistoryControls = () => {
+          if (!historyPrev || !historyNext) {
+            return;
+          }
+          historyPrev.disabled = currentIndex <= 0;
+          historyNext.disabled = currentIndex < 0 || currentIndex >= history.length - 1;
+        };
+
+        const loadHistory = async () => {
+          if (!resultCard) {
+            updateHistoryControls();
+            return;
+          }
+          try {
+            const response = await fetch("/api/history");
+            const data = await response.json();
+            history = Array.isArray(data.history) ? data.history : [];
+            const currentId = resultCard.dataset.resultId || "";
+            if (currentId) {
+              const index = history.findIndex((item) => item.result_id === currentId);
+              currentIndex = index >= 0 ? index : history.length - 1;
+            } else {
+              currentIndex = history.length - 1;
+            }
+            if (currentIndex >= 0) {
+              applyEntry(history[currentIndex]);
+            }
+          } catch (error) {
+            // Ignore history fetch errors in the UI.
+          }
+          updateHistoryControls();
+        };
+
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        const pollJob = async (statusUrl) => {
+          if (!statusUrl) {
+            throw new Error("Missing job status URL.");
+          }
+          const maxAttempts = 20 * 60;
+          for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+            const response = await fetch(statusUrl);
+            const data = await response.json();
+            if (data.status === "complete") {
+              if (!data.result) {
+                throw new Error("Job completed without a result.");
+              }
+              return data.result;
+            }
+            if (data.status === "failed") {
+              throw new Error(data.error || "Job failed.");
+            }
+            await delay(1000);
+          }
+          throw new Error("Timed out waiting for the job to finish.");
+        };
+
+        const subscribeJob = async (statusUrl, streamUrl) => {
+          if (!streamUrl || typeof EventSource === "undefined") {
+            return pollJob(statusUrl);
+          }
+
+          return new Promise((resolve, reject) => {
+            let settled = false;
+            const source = new EventSource(streamUrl);
+            const timeoutId = setTimeout(() => {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              source.close();
+              reject(new Error("Timed out waiting for the job to finish."));
+            }, 20 * 60 * 1000);
+
+            const cleanup = () => {
+              clearTimeout(timeoutId);
+              source.close();
+            };
+
+            source.onmessage = (event) => {
+              if (!event?.data) {
+                return;
+              }
+              let payload;
+              try {
+                payload = JSON.parse(event.data);
+              } catch (error) {
+                return;
+              }
+              if (payload.status === "complete") {
+                settled = true;
+                cleanup();
+                if (!payload.result) {
+                  reject(new Error("Job completed without a result."));
+                  return;
+                }
+                resolve(payload.result);
+              } else if (payload.status === "failed") {
+                settled = true;
+                cleanup();
+                reject(new Error(payload.error || "Job failed."));
+              }
+            };
+
+            source.onerror = async () => {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              cleanup();
+              try {
+                const result = await pollJob(statusUrl);
+                resolve(result);
+              } catch (error) {
+                reject(error);
+              }
+            };
+          });
+        };
+
+        const getOriginal = () => ({
+          url: removeButton?.dataset.originalUrl || "",
+          id: removeButton?.dataset.originalId || "",
+        });
+
+        if (styleSelect) {
+          const selectedStyle = styleSelect.dataset.selected || "";
+          fetch("/api/styles")
+            .then((response) => response.json())
+            .then((data) => {
+              const styles = Array.isArray(data.styles) ? data.styles : [];
+              styles.forEach((style) => {
+                const option = document.createElement("option");
+                option.value = style.id;
+                option.textContent = style.name || style.id;
+                if (style.id === selectedStyle) {
+                  option.selected = true;
+                }
+                styleSelect.appendChild(option);
+              });
+            })
+            .catch(() => {
+              styleSelect.disabled = true;
+            });
+        }
+
+        if (formEl) {
+          formEl.addEventListener("submit", async (event) => {
+            showGenerationProgress();
+            setGenerationError("");
+            if (!jobsEnabled) {
+              return;
+            }
+            event.preventDefault();
+            try {
+              const response = await fetch("/api/variations", {
+                method: "POST",
+                body: new FormData(formEl),
+              });
+              const data = await response.json();
+              if (!response.ok) {
+                throw new Error(data.error || "Failed to start generation.");
+              }
+              const result = await subscribeJob(data.status_url, data.stream_url);
+              applyEntry({
+                result_id: result.result_id,
+                result_url: result.result_url,
+                original_url: result.original_url,
+              });
+              setStatusMessage(result.status_message || "");
+              setWarningMessage(result.warning_message || "");
+              setPromptUsed(result.prompt_used || "");
+              await loadHistory();
+            } catch (error) {
+              toggleProgress(generationProgress, false);
+              setStatusMessage("");
+              setWarningMessage("");
+              setPromptUsed("");
+              setGenerationError(error.message || "Generation failed.");
+              if (resultContent) {
+                resultContent.hidden = true;
+              }
+              if (emptyState) {
+                emptyState.hidden = false;
+              }
+            } finally {
+              toggleProgress(generationProgress, false);
+            }
+          });
+        }
+
+        if (historyPrev) {
+          historyPrev.addEventListener("click", () => {
+            if (currentIndex <= 0) {
+              return;
+            }
+            currentIndex -= 1;
+            applyEntry(history[currentIndex]);
+            updateHistoryControls();
+          });
+        }
+
+        if (historyNext) {
+          historyNext.addEventListener("click", () => {
+            if (currentIndex < 0 || currentIndex >= history.length - 1) {
+              return;
+            }
+            currentIndex += 1;
+            applyEntry(history[currentIndex]);
+            updateHistoryControls();
+          });
+        }
+
+        if (removeButton) {
+          removeButton.addEventListener("click", async () => {
+            const imageId = removeButton.dataset.imageId;
+            if (!imageId) {
+              if (statusEl) {
+                statusEl.textContent = "Missing result image.";
+              }
+              return;
+            }
+
+            removeButton.disabled = true;
+            if (statusEl) {
+              statusEl.textContent = "Removing background...";
+            }
+            if (bgProgress) {
+              bgProgress.hidden = false;
+            }
+
+            try {
+              const response = await fetch("/api/remove-background", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ image_id: imageId }),
+              });
+              const data = await response.json();
+              if (!response.ok) {
+                throw new Error(data.error || "Background removal failed.");
+              }
+              const original = getOriginal();
+              const result = data.result || (await subscribeJob(data.status_url, data.stream_url));
+              applyEntry({
+                result_id: result.image_id,
+                result_url: result.result_url,
+                original_url: result.original_url,
+              });
+              if (removeButton && original.url && original.id) {
+                removeButton.dataset.originalId = original.id;
+                removeButton.dataset.originalUrl = original.url;
+              }
+              if (undoButton && original.url && original.id) {
+                undoButton.disabled = false;
+              }
+              if (statusEl) {
+                statusEl.textContent = "Background removed.";
+              }
+              await loadHistory();
+            } catch (error) {
+              if (statusEl) {
+                statusEl.textContent = error.message;
+              }
+            } finally {
+              removeButton.disabled = false;
+              if (bgProgress) {
+                bgProgress.hidden = true;
+              }
+            }
+          });
+        }
+
+        if (undoButton) {
+          undoButton.addEventListener("click", () => {
+            if (!removeButton) {
+              return;
+            }
+
+            const original = getOriginal();
+            if (!original.url || !original.id) {
+              if (statusEl) {
+                statusEl.textContent = "Original image unavailable.";
+              }
+              return;
+            }
+
+            if (resultImage) {
+              resultImage.src = original.url;
+            }
+            if (downloadLink) {
+              downloadLink.href = original.url;
+            }
+            removeButton.dataset.imageId = original.id;
+            if (previousResult) {
+              previousResult.value = original.id;
+            }
+            undoButton.disabled = true;
+            if (statusEl) {
+              statusEl.textContent = "Restored original image.";
+            }
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

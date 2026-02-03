@@ -1,0 +1,21 @@
+services:
+  web:
+    env_file:
+      - .env.development
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      APP_ENV: development
+
+  worker_generate:
+    env_file:
+      - .env.development
+    environment:
+      APP_ENV: development
+
+  worker_bg:
+    env_file:
+      - .env.development
+    environment:
+      APP_ENV: development
